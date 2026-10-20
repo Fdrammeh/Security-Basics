@@ -3,80 +3,67 @@
 #
 # Run with: uvicorn app.main:app --reload  (from security-basics/ folder)
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+"""
+Security Basics API — Security Measures
+
+1. CORS:
+   Only configured browser origins are allowed.
+
+2. Rate limiting:
+   SlowAPI limits requests by client IP:
+   - Login: 5 requests per minute.
+   - POST/create: 20 requests per minute.
+   - GET/list: 60 requests per minute.
+   Excess requests receive HTTP 429.
+
+3. Input validation:
+   Pydantic schemas enforce field types, maximum lengths,
+   and numeric ranges where applicable.
+
+4. Input sanitization:
+   Item text is trimmed and HTML tags are removed.
+
+5. SQL injection prevention:
+   Database queries should use SQLAlchemy expressions
+   or parameterized queries instead of string concatenation.
+
+Note: Rate limiting and validation complement one another;
+they do not replace authentication or database security.
+"""
+
+
+
+from fastapi import FastAPI
+#from fastapi.responses import JSONResponse
 
 # TODO: Import CORSMiddleware from fastapi.middleware.cors
 from fastapi.middleware.cors import CORSMiddleware
-
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 # TODO: Import the items router
 from app.routers import items
-import time
-
 
 app = FastAPI(title="Security Basics API")
 
-# TODO: Add CORS middleware
-# Key concept: CORS (Cross-Origin Resource Sharing) controls which web origins
-# can make requests to your API from a browser.
-# NEVER use allow_origins=["*"] in production — it allows any website to call
-# your API with the user's cookies/credentials.
-#
+# Configure SlowAPI
+app.state.limiter = items.limiter
+app.add_exception_handler(
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:8501", 
-        "https://localhost:3000"],
+        "https://localhost:3000",
+    ],    
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH","DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# TODO: Add rate limiting middleware
-# Track request counts per IP in a simple dict
-# Return 429 Too Many Requests if a single IP exceeds 10 requests per minute
-# Hint: use a dict like request_counts: dict[str, list[float]] = {}
-# Store timestamps of requests per IP, filter to last 60 seconds
-
-request_counts: dict[str, list[float]] = {}
-MAX_REQUESTS = 10
-TIME_WINDOW = 60
-
-@app.middleware("http")
-async def rate_limit(request: Request, call_next):
-
-    # Get the client's IP address 
-    client_ip = request.client.host
-
-    # Get the current time
-    current_time = time.time()
-
-    # If this IP has never made a request before, # create an empty list for it.
-    if client_ip not in request_counts: request_counts[client_ip] = []
-
-    # Keep only requests from the last 60 seconds
-    request_counts[client_ip] = [ 
-        timestamp 
-        for timestamp in request_counts[client_ip] 
-        if current_time - timestamp < TIME_WINDOW ]
-
-    # Check whether the IP has reached the limit 
-    if len(request_counts[client_ip]) >= MAX_REQUESTS:  
-        return JSONResponse( 
-            status_code=429, 
-            content={ "detail": "Too many requests. Please try again later." } )
-
-    # Record this request 
-    request_counts[client_ip].append(current_time)
-
-    # Continue to the actual endpoint 
-    response = await call_next(request)
-
-    return response
-
-# TODO: Include the items router
-app.include_router(items.router)
-
+# Include the items router
+app.include_router(items.router, prefix="/items", tags=["Items"])
 
 if __name__ == "__main__":
     import uvicorn
